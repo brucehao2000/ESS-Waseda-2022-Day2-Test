@@ -1,0 +1,244 @@
+---
+title: "Merging the datasets with tidyverse"
+author: ""
+date: "2022-09-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## Day 2
+
+We are going to use the covid 19 dataset along with the other two datasets (in "data/" folder). 
+
+- Vaccination data
+- Country level demographic data
+- Presidential voting in 2020
+ (or you can use, Presidential voting in 2016)
+
+These datasets are coming from the following places
+
+- https://data.cdc.gov/Vaccinations/COVID-19-Vaccinations-in-the-United-States-County/8xkx-amqh
+- https://www.kaggle.com/stevepalley/2016uspresidentialvotebycounty
+- https://www.kaggle.com/muonneutrino/us-census-demographic-data
+- https://www.kaggle.com/unanimad/us-election-2020
+  - (for this one, I added fips to the original file and remove quite a bit of rows)
+
+
+The task is
+
+1. check the data completeness (e.g. make sure that all datasets have common list of counties)
+2. merge the datasets
+3. check whether there are any relations between covid and any demographic/political indexes
+
+
+#### Download the file
+The vaccination data is here: https://www.dropbox.com/s/5jy18d1thntcc5t/COVID-19_Vaccinations_in_the_United_States_County.csv.tar.gz?dl=1
+
+```{r}
+dir.create("tmp")
+if(!file.exists("tmp/COVID-19_Vaccinations_in_the_United_States_County.csv.tar.gz")){
+  download.file("https://www.dropbox.com/s/5jy18d1thntcc5t/COVID-19_Vaccinations_in_the_United_States_County.csv.tar.gz?dl=1", 
+                destfile = "tmp/COVID-19_Vaccinations_in_the_United_States_County.csv.tar.gz")
+  
+}
+
+```
+
+## Packages
+
+```{r}
+library(tidyverse)
+library(magrittr)
+```
+
+## Read three data files
+
+```{r}
+data_vac <- vroom::vroom("tmp/COVID-19_Vaccinations_in_the_United_States_County.csv.tar.gz")
+data_demo <- read_csv("data/acs2017_county_data.csv")
+data_pres <- read_csv("data/pres20results.csv")
+```
+
+
+## Check the validity of the data
+
+### How the data look like
+
+```{r}
+data_pres %>% head()
+data_demo %>% head()
+```
+- renaming is necessary for `data_demo`
+- calculating voting percentage from the presidential election data
+
+
+```{r}
+data_demo %<>% rename(FIPS = CountyId)
+data_pres %<>% rename(FIPS = fips)
+data_vac %<>% mutate(FIPS = FIPS %>% as.integer)
+data_vac %<>% mutate(Date = Date %>% lubridate::mdy())
+
+
+```
+
+
+
+### How many rows in each df?
+
+```{r}
+
+```
+
+### Number of counties in each data frame
+
+- Which variable would you use to check?
+- How many unique counties in each data set?
+- Do they match? (if not does this seem problematic)?
+    
+```{r}
+data_pres_check <- data_pres %>%
+  count(FIPS)
+data_vac_check <- data_vac %>%
+  count(FIPS)
+
+data_demo %>%
+  anti_join(data_vac_check, by = 'FIPS')
+data_vac_check %>%
+  anti_join(data_demo, by = 'FIPS')
+
+data_demo %>%
+  anti_join(data_pres_check, by = 'FIPS') 
+
+```
+
+## Keep the necessary data
+
+### Get the latest numbers cases
+
+- From covid dataset, get the latest figures for each county
+
+```{r}
+max_date <- data_vac %>% 
+  pull(Date) %>% max()
+
+data_vac_newest <- data_vac %>%
+  filter(Date == max_date)
+
+```
+
+
+### Extract trump votes
+
+presidential votes
+  - Keep only trump vote rows
+
+```{r}
+df_trump <- data_pres %>%
+  mutate(vote_pct = votes/total_votes) %>%
+  filter(candidate == "Donald Trump")
+```
+
+## Merge the datasets
+
+
+### Merging
+
+- Now lets merge the data set
+  1. latest vaccination data
+  2. country demographics
+  3. presidential votes
+  
+```{r}
+data_merged <- data_vac_newest %>%
+  left_join(data_demo %>% select(-"County"), by = "FIPS") %>%
+  left_join(df_trump  %>% select(-c(state, county)), by = "FIPS") 
+  
+
+```
+
+## Using the merged datasets 
+
+- Get a correlation matrix or plot for the data
+- `cor()`
+- `pairs()`
+- `GGally::ggpairs()`, correlation plot (I showed in day 4 lecture)
+
+```{r}
+data_merged %>%
+  select(Series_Complete_Pop_Pct, Booster_Doses_18Plus_Vax_Pct,
+         vote_pct, Hispanic, Black, IncomePerCap, Unemployment) %>% 
+  cor(use = "complete.obs")
+data_merged %>%
+  select(Series_Complete_Pop_Pct, Booster_Doses_18Plus_Vax_Pct,
+         vote_pct, Hispanic, Black, IncomePerCap, Unemployment) %>% 
+  pairs()
+
+```
+## Monthy-by-month correlations between Trump Vote and Vaccination takeup.
+
+- Let's calculate the monthly update of correlation between county level vaccination and Trump vote.
+- How to address it?
+  1. Filter first date of month vaccination data
+  2. Merge with presidential vote
+  3. Group data, calculate correnation each month
+  4. Plot?
+
+
+```{r}
+
+```
+
+## Create a database
+
+From the three datasets, let's create a database
+
+What we need to do is:
+
+1. Remove some duplicated fiels
+2. Create a database connection using `DBI` and `RSQlite`
+3. Create tables from these datasets (using `dbWriteTable()`)
+4. Disconnect from the db
+
+### check the database fields
+
+- Remove duplicate rows
+- Convert dates to character
+
+```{r}
+data_demo <- data_demo %>% select(!c(State, County))
+df_trump <- df_trump %>% select(-c(party, state, candidate, county))
+data_vac <- data_vac %>% mutate(Date = as.character(Date))
+
+```
+
+
+### Create database connection
+
+```{r}
+library(DBI)
+file.remove("~/covid.sqlite")
+db <- dbConnect(RSQLite::SQLite(), "~/covid.sqlite")
+
+```
+
+### Create/populate tables
+
+```{r}
+dbWriteTable(db, name = "demo", data_demo)
+dbWriteTable(db, name = "trump", df_trump)
+dbWriteTable(db, name = "vac", data_vac)
+
+dbGetQuery(db, "select * from demo limit 5")
+
+```
+
+### Disconnect
+
+```{r}
+dbDisconnect(db)
+```
+

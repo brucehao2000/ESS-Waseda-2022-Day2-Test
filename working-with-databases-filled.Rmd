@@ -1,0 +1,155 @@
+---
+title: "Using database"
+author: ""
+date: "2022-09-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Connect to the database
+
+- Now let's use the databases
+- First connect to the database
+
+```{r}
+library(DBI)
+library(tidyverse)
+
+db <- dbConnect(RSQLite::SQLite(), "~/covid.sqlite")
+```
+
+## Run queries
+
+### Get sample rows from each table 
+
+- Get sample rows from each table
+- Use `dbGetQuery()`
+  - Run SQL queries there
+
+```{r}
+dbGetQuery(db, "select * from demo limit 5")
+dbGetQuery(db, "select * from trump limit 5")
+dbGetQuery(db, "select * from vac limit 5")
+
+dbGetQuery(db, "SELECT * FROM sqlite_schema
+WHERE type='table'
+ORDER BY name;")
+```
+
+
+### Bit more complex queries
+
+1. Get the latest data for each county
+2. Get the data on 1 Aug, 2021, and select county with less than 10 pct vaccination
+
+```{r}
+dbGetQuery(db, "select * from vac where Date = '2022-07-27' limit 5")
+dbGetQuery(db, "select * from vac where Date = '2021-08-01' and Series_Complete_Pop_Pct > 10")
+
+```
+#### Ordering and aggregation
+
+1. Order counties with the highest rate of vaccination on Aug 14, 2021
+2. Calculate the state level vaccine count
+
+
+```{r}
+df_temp <- dbGetQuery(db, "select Date, FIPS, Recip_County,  Recip_State, Series_Complete_Pop_Pct from vac where Date = '2021-08-14' order by Series_Complete_Pop_Pct desc")
+
+
+```
+
+
+### Merging tables
+
+- merge vaccine and demo table by fips
+- (advanced) calculate per 1000 cases and deaths
+
+```{r}
+
+dbGetQuery(db, "select vac.*, demo.FIPS from vac 
+            inner join demo on vac.FIPS = demo.FIPS where Date = '2021-08-14' ")
+```
+
+## dblyr
+
+Now we will use `dbplyr`
+
+### Get the object for each table
+
+```{r}
+db_demo <- tbl(db, "demo")
+db_vac <- tbl(db, "vac")
+db_trump <- tbl(db, "trump")
+```
+
+
+### Let's check the same thing we did:
+
+
+#### Get sample rows from each table 
+
+- Get sample rows from each table
+- Use `dbGetQuery()`
+  - Run SQL queries there
+
+```{r}
+db_demo %>% 
+  head()
+db_trump %>% 
+  head()
+
+```
+
+
+#### Bit more complex queries
+
+1. Get the latest data for each county
+2. Get the data on 14 Aug, 2021, and select county with more than 10 percent vaccination rate
+
+```{r}
+db_vac %>% count(Date) %>% arrange(desc(Date)) %>% head()
+db_vac %>% filter(Date == "2022-07-27") %>%
+  show_query()
+
+df_new <- db_vac %>% filter(Date == "2022-07-27") %>% collect() 
+
+
+df_new2 <- db_vac %>% filter(Date == "2021-08-14" & Series_Complete_Pop_Pct > 10) 
+```
+#### Ordering and aggregation
+
+1. Order counties with the highest number of vaccine percentage
+2. Calculate the state level vaccination total
+
+
+```{r}
+db_vac %>% filter(Date == "2022-07-27") %>% arrange(desc(Series_Complete_Pop_Pct)) %>% head(20)
+#db_vac %>% filter(Date == "2022-07-27") %>% arrange(desc(Series_Complete_Pop_Pct)) %>% show_query()
+```
+
+
+### Merging tables
+
+- merge vaccine and demo table by fips
+- calculate vaccination rate manually from Series_Complete_Yes and TotalPop
+  - compare with Series_Complete_Pop_Pct
+
+
+```{r}
+db_vac %>% filter(Date == "2022-07-27") %>%
+  left_join(db_demo, by = "FIPS") %>% head()
+
+db_vac %>% filter(Date == "2021-07-27") %>%
+  left_join(db_demo, by = "FIPS") %>%
+  mutate(vac_pct = Series_Complete_Yes / TotalPop) %>%
+  select(Series_Complete_Pop_Pct, vac_pct) %>%
+  collect() %>%
+  drop_na() %>%
+  cor()
+
+
+```
